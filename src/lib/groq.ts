@@ -1,8 +1,4 @@
-const apiKey = import.meta.env.VITE_GROQ_API_KEY
-
-if (!apiKey) {
-  throw new Error('Missing Groq API key')
-}
+export const apiKey = import.meta.env.VITE_GROQ_API_KEY
 
 export interface DiagnosisSuggestion {
   clave: string
@@ -46,6 +42,10 @@ Responde EXCLUSIVAMENTE en formato JSON:
 IMPORTANTE: Solo JSON, sin texto adicional. Cada probabilidad debe ser un número entero único.`
 
 export async function callGroqAPI(messages: any[], model = 'llama-3.1-8b-instant') {
+  if (!apiKey) {
+    throw new Error('Missing Groq API key. Configure VITE_GROQ_API_KEY.')
+  }
+
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {

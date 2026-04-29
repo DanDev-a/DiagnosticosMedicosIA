@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Activity, Loader2, Brain, ChevronDown, ChevronUp, Check, Database } from 'lucide-react'
-import { callGroqAPI } from '../lib/groq'
+import { callGroqAPI, apiKey } from '../lib/groq'
 import { supabase } from '../lib/supabase'
 import type { Diagnosis } from './SearchBar'
 
@@ -26,6 +26,17 @@ export default function SymptomAnalyzer({ onSelectDiagnosis }: SymptomAnalyzerPr
   const analyzeSymptoms = async () => {
     if (!symptoms.trim()) return
 
+    if (!supabase || !apiKey) {
+      setSuggestions([{
+        clave: 'ERROR',
+        descripcion: 'Faltan variables de entorno. Configura Supabase y Groq API key.',
+        probabilidad: 0,
+        explicacion: 'Verifica las variables en Vercel > Settings > Environment Variables.'
+      }])
+      setIsExpanded(true)
+      return
+    }
+
     setIsAnalyzing(true)
     setSuggestions([])
     setSelectedIndex(null)
@@ -41,8 +52,7 @@ export default function SymptomAnalyzer({ onSelectDiagnosis }: SymptomAnalyzerPr
           role: 'system',
           content: `Eres un médico experto en CIE-10.
 Dados los síntomas, extrae 5-8 términos médicos clave en español.
-Responde SOLO con los términos separados por comas, en minúsculas.
-Ejemplo: "gonorrea, uretritis, secreción, disuria, infección"`
+Responde SOLO con los términos separados por comas, en minúsculas.`
         },
         {
           role: 'user',
@@ -245,7 +255,7 @@ Asigna probabilidades ÚNICAS a cada uno en JSON:`
           <textarea
             value={symptoms}
             onChange={(e) => setSymptoms(e.target.value)}
-            placeholder="Ejemplo: Paciente masculino, 25 años. Secreción uretral amarillenta, disuria leve, sin fiebre."
+            placeholder="Ejemplo: Paciente masculino, 25 años..."
             rows={4}
             className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none text-sm"
           />

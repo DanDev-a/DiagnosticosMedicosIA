@@ -22,8 +22,10 @@ export default function SearchBar({ onSelectDiagnosis }: SearchBarProps) {
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    const supabaseClient = supabase
+
     const searchDiagnoses = async () => {
-      if (query.length < 2) {
+      if (!supabaseClient || query.length < 2) {
         setResults([])
         setIsOpen(false)
         return
@@ -31,7 +33,7 @@ export default function SearchBar({ onSelectDiagnosis }: SearchBarProps) {
 
       setIsLoading(true)
       try {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseClient
           .from('diagnosticos_cie10')
           .select('clave, descripcion')
           .or(`clave.ilike.%${query}%,descripcion.ilike.%${query}%`)
@@ -47,6 +49,12 @@ export default function SearchBar({ onSelectDiagnosis }: SearchBarProps) {
       } finally {
         setIsLoading(false)
       }
+    }
+
+    if (!supabaseClient) {
+      setResults([])
+      setIsOpen(false)
+      return
     }
 
     const debounce = setTimeout(searchDiagnoses, 300)
