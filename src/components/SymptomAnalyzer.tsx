@@ -55,11 +55,11 @@ Extrae términos médicos clave:`
       const termsText = termsResponse.choices[0]?.message?.content || ''
       console.log('Términos IA:', termsText)
 
-      const terms = termsText
-        .split(/[,\n]/)
-        .map(t => t.trim().toLowerCase())
-        .filter(t => t.length > 3)
-        .slice(0, 10)
+       const terms = termsText
+         .split(/[,\n]/)
+         .map((t: string) => t.trim().toLowerCase())
+         .filter((t: string) => t.length > 3)
+         .slice(0, 10)
 
       if (terms.length === 0) {
         throw new Error('La IA no pudo interpretar los síntomas')
@@ -70,7 +70,7 @@ Extrae términos médicos clave:`
 
       // PASO 2: Buscar en base de datos usando los términos
       const orConditions = terms
-        .map(term => `descripcion.ilike.%${term}%`)
+        .map((term: string) => `descripcion.ilike.%${term}%`)
         .join(',')
 
       console.log('Búsqueda:', orConditions)
@@ -183,7 +183,7 @@ Asigna probabilidades ÚNICAS a cada uno en JSON:`
         
         if (codeMatches.length > 0) {
           // Crear sugerencias basadas en el texto
-          const fallbackSuggestions = codeMatches.slice(0, 5).map((code, idx) => ({
+          const fallbackSuggestions = codeMatches.slice(0, 5).map((code: string, idx: number) => ({
             clave: code,
             descripcion: `Diagnóstico ${code}`,
             probabilidad: 95 - idx * 10,
