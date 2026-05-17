@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Activity, Loader2, Brain, Check, AlertCircle, Shield, ListTree, Info } from 'lucide-react'
+import { Activity, Loader2, Check, AlertCircle, Shield, ListTree, Info } from 'lucide-react'
 import { callGroqAPI } from '../lib/groq'
 import { supabase } from '../lib/supabase'
 import type { Diagnosis } from './SearchBar'
