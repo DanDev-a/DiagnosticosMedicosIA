@@ -41,7 +41,11 @@ Responde EXCLUSIVAMENTE en formato JSON:
 
 IMPORTANTE: Solo JSON, sin texto adicional. Cada probabilidad debe ser un número entero único.`
 
-export async function callGroqAPI(messages: any[], model = 'llama-3.1-8b-instant') {
+export async function callGroqAPI(
+  messages: any[],
+  model = 'llama-3.1-8b-instant',
+  options?: { max_tokens?: number; temperature?: number }
+) {
   if (!apiKey) {
     throw new Error('Missing Groq API key. Configure VITE_GROQ_API_KEY.')
   }
@@ -55,8 +59,8 @@ export async function callGroqAPI(messages: any[], model = 'llama-3.1-8b-instant
     body: JSON.stringify({
       model,
       messages,
-      temperature: 0.3,
-      max_tokens: 1024,
+      temperature: options?.temperature ?? 0.3,
+      max_tokens: options?.max_tokens ?? 1024,
     }),
   })
 

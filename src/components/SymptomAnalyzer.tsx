@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { Activity, Loader2, Brain, ChevronDown, ChevronUp, Check, Database } from 'lucide-react'
-import { callGroqAPI, apiKey } from '../lib/groq'
+import { useState, useRef, useEffect } from 'react'
+import { Activity, Loader2, Brain, Check, AlertCircle, Shield, ListTree, Info } from 'lucide-react'
+import { callGroqAPI } from '../lib/groq'
 import { supabase } from '../lib/supabase'
 import type { Diagnosis } from './SearchBar'
 
@@ -9,218 +9,158 @@ interface DiagnosisSuggestion {
   descripcion: string
   probabilidad: number
   explicacion: string
+  tipo: 'diagnostico' | 'procedimiento'
+  certeza: 'Alta' | 'Media' | 'Baja'
+  diferenciales: string[]
+  nota_informativa: string
 }
 
 interface SymptomAnalyzerProps {
   onSelectDiagnosis: (diagnosis: Diagnosis) => void
 }
 
+const SYSTEM_PROMPT = `Actúas como un Especialista Sénior en Codificación Clínica y Diagnóstico Diferencial con 20+ años de experiencia.
+
+Tu misión es convertir descripciones de salud en códigos CIE-10 exactos siguiendo estas reglas:
+
+1. INTERPRETACIÓN: Identifica si la entrada es de un médico (técnico) o paciente (coloquial). Traduce lenguaje coloquial a términos médicos precisos.
+
+2. JERARQUÍA: Asigna el código más específico posible (3, 4 o 5 caracteres). Prefiere el código más específico sobre el genérico.
+
+3. VALIDACIÓN: Aplica criterio clínico y reglas de inclusión/exclusión CIE-10.
+
+4. Responde ÚNICAMENTE con un array JSON válido. Mínimo 3 diagnósticos, máximo 8.
+   Cada objeto del array debe tener esta estructura EXACTA:
+
+{
+  "clave": "A90",
+  "descripcion": "Dengue [nombre oficial CIE-10]",
+  "probabilidad": 95,
+  "explicacion": "Cuadro clásico: fiebre alta + cefalea retroocular + mialgias + artralgias + exantema",
+  "certeza": "Alta",
+  "diferenciales": ["A91 - Fiebre del dengue hemorrágico", "A92 - Otras fiebres virales por mosquitos"],
+  "nota_informativa": "Explicación breve en lenguaje sencillo pero con rigor médico"
+}
+
+REGLAS PARA CADA CAMPO:
+- "clave": Código CIE-10 exacto (ej: A90, A01.0, J10.1, R50.9)
+- "descripcion": Nombre oficial del diagnóstico
+- "probabilidad": Número entero del 1 al 100, CADA UNO DIFERENTE
+- "explicacion": Correlación clínica breve de por qué este diagnóstico explica los síntomas
+- "certeza": "Alta" (90-100%), "Media" (50-89%), "Baja" (1-49%) según qué tan específicos sean los síntomas
+- "diferenciales": Array de 2-3 strings con código y nombre de diagnósticos que podrían confundirse
+- "nota_informativa": Explicación en lenguaje claro para un paciente, pero con rigor profesional
+
+CRÍTICO: Sin texto antes ni después del JSON. Solo el array.`
+
 export default function SymptomAnalyzer({ onSelectDiagnosis }: SymptomAnalyzerProps) {
   const [symptoms, setSymptoms] = useState('')
   const [suggestions, setSuggestions] = useState<DiagnosisSuggestion[]>([])
   const [isAnalyzing, setIsAnalyzing] = useState(false)
-  const [isExpanded, setIsExpanded] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
-  const [message, setMessage] = useState('')
+  const [step, setStep] = useState<'idle' | 'analyzing' | 'searching' | 'done' | 'error'>('idle')
+
+  const resultsRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (suggestions.length > 0 && resultsRef.current) {
+      resultsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [suggestions])
 
   const analyzeSymptoms = async () => {
     if (!symptoms.trim()) return
 
-    if (!supabase || !apiKey) {
-      setSuggestions([{
-        clave: 'ERROR',
-        descripcion: 'Faltan variables de entorno. Configura Supabase y Groq API key.',
-        probabilidad: 0,
-        explicacion: 'Verifica las variables en Vercel > Settings > Environment Variables.'
-      }])
-      setIsExpanded(true)
-      return
-    }
-
     setIsAnalyzing(true)
     setSuggestions([])
     setSelectedIndex(null)
-    setMessage('')
+    setStep('analyzing')
 
     try {
-      console.log('=== ANÁLISIS INICIADO ===')
-      console.log('Síntomas:', symptoms)
+      setStep('analyzing')
 
-      // PASO 1: IA interpreta síntomas y sugiere términos de búsqueda
-      const termsResponse = await callGroqAPI([
-        {
-          role: 'system',
-          content: `Eres un médico experto en CIE-10.
-Dados los síntomas, extrae 5-8 términos médicos clave en español.
-Responde SOLO con los términos separados por comas, en minúsculas.`
-        },
-        {
-          role: 'user',
-          content: `Síntomas: ${symptoms}
+      const response = await callGroqAPI([
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: `Paciente: ${symptoms}\n\nDiagnóstico Diferencial CIE-10:` }
+      ], undefined, { max_tokens: 4096, temperature: 0.1 })
 
-Extrae términos médicos clave:`
-        }
-      ])
+      const rawText = response.choices[0]?.message?.content || ''
 
-      const termsText = termsResponse.choices[0]?.message?.content || ''
-      console.log('Términos IA:', termsText)
+      let jsonStr = rawText.trim()
+      const start = jsonStr.indexOf('[')
+      const end = jsonStr.lastIndexOf(']')
+      if (start !== -1 && end !== -1) jsonStr = jsonStr.substring(start, end + 1)
 
-       const terms = termsText
-         .split(/[,\n]/)
-         .map((t: string) => t.trim().toLowerCase())
-         .filter((t: string) => t.length > 3)
-         .slice(0, 10)
+      jsonStr = jsonStr.replace(/,\s*]/g, ']').replace(/,\s*}/g, '}')
+      const parsed: any[] = JSON.parse(jsonStr)
 
-      if (terms.length === 0) {
-        throw new Error('La IA no pudo interpretar los síntomas')
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        throw new Error('Respuesta IA inválida')
       }
 
-      console.log('Términos a buscar:', terms)
-      setMessage(`Términos IA: ${terms.join(', ')}`)
+      const codes = parsed.map((d: any) => d.clave).filter(Boolean)
 
-      // PASO 2: Buscar en base de datos usando los términos
-      const orConditions = terms
-        .map((term: string) => `descripcion.ilike.%${term}%`)
-        .join(',')
+      setStep('searching')
 
-      console.log('Búsqueda:', orConditions)
+      const codeSet = [...new Set(codes as string[])]
+      let foundMap = new Map<string, string>()
 
-      const { data: dbResults, error } = await supabase
-        .from('diagnosticos_cie10')
-        .select('clave, descripcion')
-        .or(orConditions)
-        .limit(30)
+      if (supabase && codeSet.length > 0) {
+        const { data: diagData } = await supabase
+          .from('diagnosticos_cie10')
+          .select('clave, descripcion')
+          .in('clave', codeSet)
 
-      if (error) {
-        throw new Error(`Error BD: ${error.message}`)
+        const { data: procData } = await supabase
+          .from('procedimientos_cie10')
+          .select('clave, descripcion')
+          .in('clave', codeSet)
+
+        if (diagData) diagData.forEach(d => foundMap.set(d.clave, d.descripcion))
+        if (procData) procData.forEach(d => foundMap.set(d.clave, d.descripcion))
       }
 
-      console.log('Encontrados en BD:', dbResults?.length || 0)
-      setMessage(prev => `${prev} | BD: ${dbResults?.length || 0} resultados`)
-
-      if (!dbResults || dbResults.length === 0) {
-        setSuggestions([{
-          clave: 'NO_RESULTS',
-          descripcion: 'No se encontraron diagnósticos relacionados',
-          probabilidad: 0,
-          explicacion: `Términos buscados: ${terms.join(', ')}`
-        }])
-        setIsExpanded(true)
-        setIsAnalyzing(false)
-        return
+      const procCodes = new Set<string>()
+      if (supabase && codeSet.length > 0) {
+        const { data: procCheck } = await supabase
+          .from('procedimientos_cie10')
+          .select('clave')
+          .in('clave', codeSet)
+        if (procCheck) procCheck.forEach(d => procCodes.add(d.clave))
       }
 
-      // PASO 3: IA analiza resultados y asigna probabilidades ÚNICAS
-      const diagnosesList = dbResults
-        .map(d => `${d.clave}: ${d.descripcion}`)
-        .join('\n')
+      const finalResults: DiagnosisSuggestion[] = parsed
+        .filter((d: any) => d.clave && d.descripcion)
+        .map((d: any, idx: number) => ({
+          clave: d.clave,
+          descripcion: foundMap.get(d.clave) || d.descripcion,
+          probabilidad: Math.min(100, Math.max(1, Number(d.probabilidad) || (95 - idx * 9))),
+          explicacion: d.explicacion || 'Diagnóstico sugerido por IA',
+          tipo: procCodes.has(d.clave) ? 'procedimiento' as const : 'diagnostico' as const,
+          certeza: ['Alta', 'Media', 'Baja'].includes(d.certeza) ? d.certeza as 'Alta' | 'Media' | 'Baja' :
+            d.probabilidad >= 80 ? 'Alta' : d.probabilidad >= 50 ? 'Media' : 'Baja',
+          diferenciales: Array.isArray(d.diferenciales) ? d.diferenciales.slice(0, 3) : [],
+          nota_informativa: d.nota_informativa || ''
+        }))
+        .sort((a: DiagnosisSuggestion, b: DiagnosisSuggestion) => b.probabilidad - a.probabilidad)
+        .slice(0, 8)
 
-      const analysisResponse = await callGroqAPI([
-        {
-          role: 'system',
-          content: `Eres un médico colegiado.
-Asigna a CADA diagnóstico un porcentaje único (1-100).
-CADA probabilidad debe ser DIFERENTE.
-Usa valores variados: 95, 87, 73, 52, 28...
+      if (finalResults.length === 0) throw new Error('No se pudieron generar diagnósticos')
 
-Responde SOLO con JSON:
-[
-  {"clave": "A540", "descripcion": "Gonorrea", "probabilidad": 95, "explicacion": "Coincide por secreción"},
-  {"clave": "N341", "descripcion": "Uretritis", "probabilidad": 78, "explicacion": "Síntomas de uretra"}
-]`
-        },
-        {
-          role: 'user',
-          content: `SÍNTOMAS: ${symptoms}
-
-DIAGNÓSTICOS ENCONTRADOS (${dbResults.length}):
-${diagnosesList}
-
-Asigna probabilidades ÚNICAS a cada uno en JSON:`
-        }
-      ])
-
-      const responseText = analysisResponse.choices[0]?.message?.content || ''
-      console.log('Respuesta IA:', responseText)
-
-      try {
-        const responseText = analysisResponse.choices[0]?.message?.content || ''
-        console.log('Respuesta IA:', responseText)
-
-        // Extraer y limpiar el JSON de forma robusta
-        let jsonString = responseText.trim()
-        
-        // Buscar el primer '[' y el último ']'
-        const startIndex = jsonString.indexOf('[')
-        const endIndex = jsonString.lastIndexOf(']')
-        
-        if (startIndex === -1 || endIndex === -1) {
-          throw new Error('No se encontró JSON en la respuesta')
-        }
-        
-        jsonString = jsonString.substring(startIndex, endIndex + 1)
-        console.log('JSON extraído:', jsonString)
-        
-        // Limpiar problemas comunes de formato JSON
-        jsonString = jsonString
-          .replace(/,\s*]/g, ']') // Eliminar comas antes de ]
-          .replace(/,\s*}/g, '}') // Eliminar comas antes de }
-          .replace(/'/g, '"') // Cambiar comillas simples por dobles
-          .replace(/($$\w+$$)/g, '"$1"') // Poner comillas en nombres de propiedades
-        
-        console.log('JSON limpio:', jsonString)
-        
-        const parsed = JSON.parse(jsonString) as DiagnosisSuggestion[]
-        
-        // Validar que las claves existan en la BD
-        const validatedResults = parsed
-          .filter(d => dbResults.some(db => db.clave === d.clave))
-          .map((d, idx) => ({
-            ...d,
-            probabilidad: Math.min(100, Math.max(1, Number(d.probabilidad) || (99 - idx * 7)))
-          }))
-          .sort((a, b) => b.probabilidad - a.probabilidad)
-
-        console.log('Resultados finales:', validatedResults)
-        setSuggestions(validatedResults.length > 0 ? validatedResults : parsed)
-        setIsExpanded(true)
-      } catch (parseError) {
-        console.error('Error parseando:', parseError)
-        console.log('Texto completo IA:', responseText)
-        
-        // Intentar extraer información útil del texto
-        const codeMatches = responseText.match(/[A-Z]\d{2,4}[A-Z]?/g) || []
-        
-        if (codeMatches.length > 0) {
-          // Crear sugerencias basadas en el texto
-          const fallbackSuggestions = codeMatches.slice(0, 5).map((code: string, idx: number) => ({
-            clave: code,
-            descripcion: `Diagnóstico ${code}`,
-            probabilidad: 95 - idx * 10,
-            explicacion: 'Extraído de la respuesta de la IA'
-          }))
-          setSuggestions(fallbackSuggestions)
-          setIsExpanded(true)
-        } else {
-          setSuggestions([{
-            clave: 'ERROR',
-            descripcion: 'Error al procesar la respuesta de la IA',
-            probabilidad: 0,
-            explicacion: responseText.substring(0, 500)
-          }])
-          setIsExpanded(true)
-        }
-      }
-
+      setSuggestions(finalResults)
+      setStep('done')
     } catch (error: any) {
-      console.error('Error general:', error)
       setSuggestions([{
         clave: 'ERROR',
-        descripcion: `Error: ${error?.message || 'Error desconocido'}`,
+        descripcion: `Error: ${error.message}`,
         probabilidad: 0,
-        explicacion: 'Verifica la consola del navegador (F12).'
+        explicacion: '',
+        tipo: 'diagnostico',
+        certeza: 'Baja',
+        diferenciales: [],
+        nota_informativa: 'Revisa la consola del navegador (F12) para más detalles.'
       }])
-      setIsExpanded(true)
+      setStep('error')
     } finally {
       setIsAnalyzing(false)
     }
@@ -230,127 +170,195 @@ Asigna probabilidades ÚNICAS a cada uno en JSON:`
     setSelectedIndex(index)
     onSelectDiagnosis({
       clave: suggestion.clave,
-      descripcion: suggestion.descripcion
+      descripcion: suggestion.descripcion,
+      tipo: suggestion.tipo
     })
   }
 
-  const getProbabilityColor = (prob: number) => {
-    if (prob >= 70) return 'bg-green-100 text-green-800 border-green-300'
-    if (prob >= 40) return 'bg-yellow-100 text-yellow-800 border-yellow-300'
-    return 'bg-red-100 text-red-800 border-red-300'
+  const getCertezaBadge = (certeza: string) => {
+    switch (certeza) {
+      case 'Alta': return 'bg-green-100 text-green-800 border-green-300'
+      case 'Media': return 'bg-amber-100 text-amber-800 border-amber-300'
+      case 'Baja': return 'bg-red-100 text-red-800 border-red-300'
+      default: return 'bg-gray-100 text-gray-800 border-gray-300'
+    }
   }
 
-  const getProbabilityLabel = (prob: number) => {
-    return prob > 0 ? `${prob}%` : ''
+  const getProbColor = (prob: number) => {
+    if (prob >= 80) return 'from-green-500 to-green-600'
+    if (prob >= 60) return 'from-emerald-500 to-emerald-600'
+    if (prob >= 40) return 'from-yellow-500 to-yellow-600'
+    if (prob >= 20) return 'from-orange-500 to-orange-600'
+    return 'from-red-500 to-red-600'
+  }
+
+  const stepMessages: Record<string, string> = {
+    analyzing: 'IA analizando síntomas con diagnóstico diferencial...',
+    searching: 'Verificando códigos en BD CIE-10...',
+    done: 'Análisis completado',
+    error: 'Error en el análisis'
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-12">
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          Analizador de Síntomas (IA Médica + CIE-10)
-        </label>
-        <div className="relative">
-          <Activity className="absolute left-3 top-3 text-gray-400 w-5 h-5" />
+        <div className="text-center space-y-2 mb-10">
+          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-[#191C1C]">
+            ¿Qué síntomas presenta el paciente?
+          </h2>
+          <p className="text-slate-500 text-sm font-medium">Asistente clínico inteligente con codificación CIE-10</p>
+        </div>
+
+        <div className="group relative bg-white border border-slate-200 rounded-2xl p-2 shadow-sm transition-all focus-within:shadow-md focus-within:border-slate-300">
           <textarea
             value={symptoms}
             onChange={(e) => setSymptoms(e.target.value)}
-            placeholder="Ejemplo: Paciente masculino, 25 años..."
-            rows={4}
-            className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none text-sm"
+            placeholder="Describa el cuadro clínico aquí..."
+            rows={2}
+            className="w-full px-4 py-3 bg-transparent outline-none resize-none text-lg md:text-xl placeholder:text-slate-300 transition-all font-medium"
           />
+          <div className="flex items-center justify-end px-3 py-2">
+            <button
+              onClick={analyzeSymptoms}
+              disabled={isAnalyzing || !symptoms.trim()}
+              className="flex items-center justify-center gap-2 px-5 py-2.5 bg-[#202124] text-white rounded-full hover:bg-black disabled:opacity-20 transition-all font-bold text-sm"
+            >
+              {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
+              <span>{isAnalyzing ? 'Analizando' : 'Analizar'}</span>
+            </button>
+          </div>
         </div>
-        <button
-          onClick={analyzeSymptoms}
-          disabled={isAnalyzing || !symptoms.trim()}
-          className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors font-medium"
-        >
-          {isAnalyzing ? (
-            <>
-              <Loader2 className="w-5 h-5 animate-spin" />
-              Analizando síntomas con IA...
-            </>
-          ) : (
-            <>
-              <Brain className="w-5 h-5" />
-              Analizar con IA Médica
-            </>
-          )}
-        </button>
       </div>
 
-      {message && (
-        <div className="text-xs text-gray-500 flex items-start gap-1 bg-gray-50 p-2 rounded">
-          <Database className="w-3 h-3 mt-0.5 flex-shrink-0" />
-          <span>{message}</span>
+      {isAnalyzing && (
+        <div className="bg-white border border-blue-100 rounded-2xl p-6 shadow-sm flex items-center gap-5">
+          <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+          <div className="flex-1">
+            <p className="text-base font-semibold text-blue-900">Procesando...</p>
+            <p className="text-xs text-blue-700">{stepMessages[step]}</p>
+          </div>
         </div>
       )}
 
-      {suggestions.length > 0 && (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 border-b border-gray-200 hover:bg-gray-100"
-          >
-            <span className="font-medium text-gray-900">
-              Diagnósticos Sugeridos ({suggestions.length})
-            </span>
-            {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-          </button>
-
-          {isExpanded && (
-            <div className="divide-y divide-gray-100">
-              {suggestions.map((suggestion, index) => (
-                <div
-                  key={index}
-                  className={`p-4 hover:bg-gray-50 ${
-                    selectedIndex === index ? 'bg-blue-50 border-l-4 border-blue-500' : ''
-                  }`}
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="font-mono text-sm font-semibold text-blue-600">
-                          {suggestion.clave}
-                        </span>
-                        {suggestion.probabilidad > 0 && (
-                          <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${getProbabilityColor(suggestion.probabilidad)}`}>
-                            {getProbabilityLabel(suggestion.probabilidad)}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-gray-700 font-medium">
-                        {suggestion.descripcion}
-                      </p>
-                    </div>
-                    {suggestion.clave !== 'ERROR' && suggestion.clave !== 'NO_RESULTS' && (
-                      <button
-                        onClick={() => handleSelect(suggestion, index)}
-                        className={`ml-3 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                          selectedIndex === index
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
-                      >
-                        {selectedIndex === index ? (
-                          <span className="flex items-center gap-1">
-                            <Check className="w-3 h-3" />
-                            Seleccionado
-                          </span>
-                        ) : (
-                          'Seleccionar'
-                        )}
-                      </button>
-                    )}
-                  </div>
-                  {suggestion.explicacion && suggestion.clave !== 'ERROR' && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      {suggestion.explicacion}
-                    </p>
-                  )}
+      {suggestions.length > 0 && !isAnalyzing && (
+        <div ref={resultsRef} className="space-y-5">
+          {suggestions[0]?.clave === 'ERROR' || suggestions[0]?.clave === 'CONFIG' ? (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-5">
+              <div className="flex items-start gap-4">
+                <AlertCircle className="w-6 h-6 text-red-600 mt-0.5" />
+                <div>
+                  <p className="text-base font-bold text-red-900">Error</p>
+                  <p className="text-sm text-red-700 mt-1">{suggestions[0].descripcion}</p>
                 </div>
-              ))}
+              </div>
             </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-base font-bold text-slate-700 tracking-tight">
+                  Fuentes y Probabilidades
+                </h4>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-100 px-3 py-1 rounded-full">
+                  {suggestions.length} resultados
+                </span>
+              </div>
+
+              <div className="space-y-4">
+                {suggestions.map((suggestion, index) => (
+                  <div
+                    key={`${suggestion.clave}-${index}`}
+                    className={`bg-white border rounded-2xl overflow-hidden transition-all duration-300 ${
+                      selectedIndex === index
+                        ? 'border-blue-500 ring-4 ring-blue-500/5 shadow-md'
+                        : 'border-slate-200/60 hover:border-blue-300'
+                    }`}
+                  >
+                    <div className="p-4 sm:p-5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`font-mono text-xs font-bold px-2 py-0.5 rounded ${
+                              suggestion.tipo === 'procedimiento'
+                                ? 'bg-purple-100 text-purple-700'
+                                : 'bg-blue-100 text-blue-600'
+                            }`}>
+                              {suggestion.clave}
+                            </span>
+                            <span className="text-xs text-slate-400">CIE-10</span>
+                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${getCertezaBadge(suggestion.certeza)}`}>{suggestion.certeza}
+                            </span>
+                            <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
+                              {suggestion.probabilidad}%
+                            </span>
+                          </div>
+                          <p className="text-base text-slate-800 font-bold mt-2">
+                            {suggestion.descripcion}
+                          </p>
+                          <p className="text-sm text-slate-600 mt-1 leading-relaxed">
+                            {suggestion.explicacion}
+                          </p>
+
+                          {suggestion.diferenciales.length > 0 && (
+                            <div className="mt-3 flex items-start gap-2">
+                              <ListTree className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                              <div className="flex flex-wrap gap-2">
+                                {suggestion.diferenciales.map((diff, i) => (
+                                  <span key={i} className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded">
+                                    {diff}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {suggestion.nota_informativa && (
+                            <div className="mt-3 flex items-start gap-2">
+                              <Info className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
+                              <p className="text-xs text-slate-500 italic">
+                                {suggestion.nota_informativa}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleSelect(suggestion, index)}
+                          className={`shrink-0 px-4 py-2 text-xs font-bold rounded-xl transition-all ${
+                            selectedIndex === index
+                              ? 'bg-blue-600 text-white shadow'
+                              : 'bg-slate-50 text-slate-600 hover:bg-blue-50 hover:text-blue-600 border border-slate-200'
+                          }`}
+                        >
+                          {selectedIndex === index ? (
+                            <span className="flex items-center gap-1">
+                              <Check className="w-4 h-4" />
+                              <span className="hidden sm:inline">Seleccionado</span>
+                            </span>
+                          ) : (
+                            'Seleccionar'
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="h-1 w-full bg-slate-100">
+                      <div
+                        className={`h-full rounded-r bg-linear-to-r ${getProbColor(suggestion.probabilidad)} transition-all duration-500`}
+                        style={{ width: `${suggestion.probabilidad}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3 mt-4">
+                <Shield className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+                <p className="text-xs text-amber-800 leading-relaxed">
+                  <strong>Aviso importante:</strong> Esta herramienta es de apoyo administrativo y educativo basado en CIE-10.
+                  No reemplaza el juicio clínico de un profesional de la salud debidamente capacitado.
+                  Todo diagnóstico debe ser confirmado por un médico colegiado mediante evaluación presencial.
+                </p>
+              </div>
+            </>
           )}
         </div>
       )}

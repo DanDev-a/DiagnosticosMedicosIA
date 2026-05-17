@@ -2,18 +2,18 @@ import { Stethoscope } from 'lucide-react'
 
 export default function Header() {
   return (
-    <header className="bg-white border-b border-gray-200 shadow-sm">
-      <div className="container mx-auto px-6 py-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-blue-600 rounded-lg">
-            <Stethoscope className="w-6 h-6 text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Asistencia Medica por IA</h1>
-            <p className="text-sm text-gray-500">CIE-10 Diagnósticos y Recetas Inteligentes</p>
-          </div>
-        </div>
+    <div className="flex items-center gap-3">
+      <div className="p-2 bg-blue-600 rounded-xl flex items-center justify-center flex-shrink-0">
+        <Stethoscope className="w-5 h-5 text-white" />
       </div>
-    </header>
+      <div className="min-w-0 hidden lg:block">
+        <h1 className="text-lg font-bold text-slate-900 tracking-tighter leading-none">
+          MedAssist <span className="text-blue-600 italic">AI</span>
+        </h1>
+        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter mt-1">
+          CIE-10 Expert
+        </p>
+      </div>
+    </div>
   )
 }
