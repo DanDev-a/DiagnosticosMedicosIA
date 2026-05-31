@@ -1,39 +1,41 @@
-import { useState, useRef } from 'react'
-import { FileText, Loader2, Copy, Check, Sparkles, Printer, User, Calendar, Hash, Eye, Stethoscope, Syringe } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback, memo } from 'react'
+import { FileText, Loader2, Copy, Check, Sparkles, Printer, Eye, Stethoscope, Syringe } from 'lucide-react'
 import { callGroqAPI, SYSTEM_PROMPT_PRESCRIPTION } from '../lib/groq'
-
-interface Diagnosis {
-  clave: string
-  descripcion: string
-  tipo: 'diagnostico' | 'procedimiento'
-}
-
-interface PatientInfo {
-  name: string
-  age: string
-  gender: string
-  date: string
-}
+import type { Diagnosis, PatientInfo } from '../types'
 
 interface PrescriptionViewProps {
   selectedDiagnosis: Diagnosis | null
+  patient: PatientInfo
 }
 
-export default function PrescriptionView({ selectedDiagnosis }: PrescriptionViewProps) {
+const PrescriptionView = memo(function PrescriptionView({ selectedDiagnosis, patient }: PrescriptionViewProps) {
   const [prescription, setPrescription] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
   const [isCopied, setIsCopied] = useState(false)
-  const [patient, setPatient] = useState<PatientInfo>({
-    name: '',
-    age: '',
-    gender: '',
-    date: new Date().toISOString().split('T')[0]
-  })
 
   const printRef = useRef<HTMLDivElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
-  const generatePrescription = async () => {
+  const diagnosisKey = `${selectedDiagnosis?.clave}-${selectedDiagnosis?.tipo}`
+
+  // Cancelar petición al desmontar
+  useEffect(() => {
+    return () => abortRef.current?.abort()
+  }, [])
+
+  // Limpiar receta al cambiar de diagnóstico
+  useEffect(() => {
+    setPrescription('')
+    setIsCopied(false)
+  }, [diagnosisKey])
+
+  // Generar receta
+  const generatePrescription = useCallback(async () => {
     if (!selectedDiagnosis) return
+
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
 
     setIsGenerating(true)
     setPrescription('')
@@ -87,17 +89,25 @@ Advertencias:
 
 Próximo control: [fecha sugerida]`
         }
-      ])
+      ], undefined, { signal: controller.signal })
 
       const generatedText = data.choices[0]?.message?.content || ''
       setPrescription(generatedText)
     } catch (error: any) {
+      if (error.name === 'AbortError') return
       console.error('Error generating prescription:', error)
       setPrescription(`Error al generar la receta: ${error?.message || 'Error desconocido'}`)
     } finally {
       setIsGenerating(false)
     }
-  }
+  }, [selectedDiagnosis, patient])
+
+  // Auto-generar cuando se selecciona un nuevo diagnóstico
+  useEffect(() => {
+    if (selectedDiagnosis) {
+      generatePrescription()
+    }
+  }, [diagnosisKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const copyToClipboard = async () => {
     try {
@@ -135,211 +145,89 @@ Próximo control: [fecha sugerida]`
     printWindow.document.close()
   }
 
+  if (!selectedDiagnosis) return null
+
   return (
-    <div className="bg-white border border-slate-200 rounded-[32px] shadow-sm overflow-hidden transition-all">
-      <div className="bg-white border-b border-slate-100 px-6 py-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <FileText className="w-5 h-5 text-blue-600" />
-            <h2 className="text-xl font-bold text-slate-900 tracking-tight">Receta Médica</h2>
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      {/* Header */}
+      <div className="border-b border-gray-100 px-4 sm:px-5 py-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-7 h-7 bg-gray-100 rounded-lg flex items-center justify-center shrink-0">
+              <FileText className="w-4 h-4 text-gray-600" />
+            </div>
+            <h2 className="text-sm font-semibold text-gray-900 truncate">Receta Médica</h2>
           </div>
-          <div className="flex items-center gap-2">
-            {prescription && !isGenerating && (
-              <>
-                <button
-                  onClick={handlePrint}
-                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors shadow-sm"
-                  title="Imprimir"
-                >
-                  <Printer className="w-4 h-4" />
-                  <span className="hidden sm:inline">Imprimir</span>
-                </button>
-                <button
-                  onClick={copyToClipboard}
-                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors shadow-sm"
-                >
-                  {isCopied ? (
-                    <>
-                      <Check className="w-4 h-4 text-green-600" />
-                      <span className="hidden sm:inline">Copiado</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-4 h-4" />
-                      <span className="hidden sm:inline">Copiar</span>
-                    </>
-                  )}
-                </button>
-              </>
-            )}
-          </div>
+          {prescription && !isGenerating && (
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={handlePrint}
+                className="flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-[11px] font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                title="Imprimir"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Imprimir</span>
+              </button>
+              <button
+                onClick={copyToClipboard}
+                className="flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-[11px] font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                {isCopied ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-green-600" />
+                    <span className="hidden sm:inline">Copiado</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Copiar</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="p-6 sm:p-8">
-        {!selectedDiagnosis ? (
-          <div className="text-center py-16">
-            <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-5">
-              <FileText className="w-10 h-10 text-slate-300" />
+      <div className="p-4 sm:p-5">
+        <div className="space-y-5">
+          {/* Loading state */}
+          {isGenerating && (
+            <div className="text-center py-6 bg-gray-50 border border-gray-200 rounded-xl">
+              <Loader2 className="w-8 h-8 text-gray-500 animate-spin mx-auto mb-3" />
+              <p className="text-sm text-gray-700 font-medium">Generando receta médica...</p>
+              <p className="text-xs text-gray-400 mt-1">La IA está preparando la prescripción</p>
             </div>
-            <p className="text-slate-500 font-semibold mb-1 text-lg">Ningún elemento seleccionado</p>
-            <p className="text-sm text-slate-400">
-              Usa el analizador de síntomas o la búsqueda CIE-10
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-6">
-              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-semibold uppercase tracking-wider mb-1 flex items-center gap-1.5">
-                    {selectedDiagnosis.tipo === 'procedimiento' ? (
-                      <Syringe className="w-4 h-4 text-purple-600" />
-                    ) : (
-                      <Stethoscope className="w-4 h-4 text-blue-600" />
-                    )}
-                    <span className={selectedDiagnosis.tipo === 'procedimiento' ? 'text-purple-600' : 'text-blue-600'}>
-                      {selectedDiagnosis.tipo === 'procedimiento' ? 'Procedimiento Seleccionado' : 'Diagnóstico Seleccionado'}
-                    </span>
-                  </p>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`font-mono text-base font-bold px-2 py-0.5 rounded ${
-                      selectedDiagnosis.tipo === 'procedimiento'
-                        ? 'bg-purple-100 text-purple-700'
-                        : 'bg-blue-100 text-blue-700'
-                    }`}>
-                      {selectedDiagnosis.clave}
-                    </span>
-                    <span className={`text-xs ${
-                      selectedDiagnosis.tipo === 'procedimiento' ? 'text-purple-500' : 'text-blue-500'
-                    }`}>
-                      CIE-10
-                    </span>
-                  </div>
-                  <p className="text-base text-slate-800 mt-2">
-                    {selectedDiagnosis.descripcion}
-                  </p>
+          )}
+
+          {/* Result preview */}
+          {prescription && !isGenerating && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Eye className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                  <span className="text-xs font-medium text-gray-600">Vista previa</span>
                 </div>
-                <button
-                  onClick={generatePrescription}
-                  disabled={isGenerating}
-                  className="flex items-center justify-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-2xl hover:bg-slate-800 disabled:opacity-50 transition-all text-sm font-bold shadow-lg active:scale-95 flex-shrink-0"
-                >
-                  {isGenerating ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Generando...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-4 h-4" />
-                      Generar Receta
-                    </>
-                  )}
-                </button>
+                {!prescription.startsWith('Error') && (
+                  <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded shrink-0">
+                    Generado por IA
+                  </span>
+                )}
+              </div>
+              <div
+                ref={printRef}
+                className="bg-white border border-gray-200 rounded-lg p-4 sm:p-5 shadow-inner"
+              >
+                <pre className="whitespace-pre-wrap font-mono text-xs text-gray-700 leading-relaxed">
+                  {prescription}
+                </pre>
               </div>
             </div>
-
-            <div className="bg-slate-50 border border-slate-100 rounded-xl p-5">
-              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-3">
-                Datos del Paciente <span className="text-slate-400 font-normal normal-case">(opcional)</span>
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1 font-medium">
-                    <User className="w-3 h-3 inline mr-1" />
-                    Nombre
-                  </label>
-                  <input
-                    type="text"
-                    value={patient.name}
-                    onChange={(e) => setPatient(p => ({ ...p, name: e.target.value }))}
-                    placeholder="Nombre del paciente"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1 font-medium">
-                    <Hash className="w-3 h-3 inline mr-1" />
-                    Edad
-                  </label>
-                  <input
-                    type="number"
-                    value={patient.age}
-                    onChange={(e) => setPatient(p => ({ ...p, age: e.target.value }))}
-                    placeholder="Edad en años"
-                    min="0"
-                    max="150"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1 font-medium">Sexo</label>
-                  <select
-                    value={patient.gender}
-                    onChange={(e) => setPatient(p => ({ ...p, gender: e.target.value }))}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all bg-white"
-                  >
-                    <option value="">Seleccionar</option>
-                    <option value="Masculino">Masculino</option>
-                    <option value="Femenino">Femenino</option>
-                    <option value="Otro">Otro</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1 font-medium">
-                    <Calendar className="w-3 h-3 inline mr-1" />
-                    Fecha
-                  </label>
-                  <input
-                    type="date"
-                    value={patient.date}
-                    onChange={(e) => setPatient(p => ({ ...p, date: e.target.value }))}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {isGenerating && (
-              <div className="text-center py-8 bg-gray-50 border border-gray-200 rounded-lg">
-                <Loader2 className="w-10 h-10 text-blue-600 animate-spin mx-auto mb-3" />
-                <p className="text-gray-600 font-medium">Generando receta médica...</p>
-                <p className="text-sm text-gray-400 mt-1">La IA está preparando la prescripción</p>
-                <div className="mt-4 flex justify-center gap-1">
-                  <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                </div>
-              </div>
-            )}
-
-            {prescription && !isGenerating && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Eye className="w-4 h-4 text-gray-500" />
-                    <span className="text-sm font-medium text-gray-700">Vista previa</span>
-                  </div>
-                  {prescription && !prescription.startsWith('Error') && (
-                    <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
-                      Generado por IA
-                    </span>
-                  )}
-                </div>
-                <div
-                  ref={printRef}
-                  className="bg-white border border-gray-200 rounded-lg p-4 sm:p-6 shadow-inner"
-                >
-                  <pre className="whitespace-pre-wrap font-mono text-xs sm:text-sm text-gray-800 leading-relaxed">
-                    {prescription}
-                  </pre>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   )
-}
+})
+
+export default PrescriptionView

@@ -2,58 +2,15 @@
 
 html {
 	font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-	background: linear-gradient(135deg, #f8fafc 0%, #e0e7ef 100%);
-	color: #18181b;
-	letter-spacing: 0.01em;
 	-webkit-font-smoothing: antialiased;
 	-moz-osx-font-smoothing: grayscale;
 }
 
 body {
-	background: transparent;
-	min-height: 100vh;
-}
-
-::-webkit-scrollbar {
-	width: 10px;
-	background: #f1f5f9;
-}
-::-webkit-scrollbar-thumb {
-	background: #e0e7ef;
-	border-radius: 8px;
+	margin: 0;
+	padding: 0;
 }
 
 input, textarea, select, button {
 	font-family: inherit;
-	outline: none;
-	transition: box-shadow 0.2s, border-color 0.2s;
-}
-
-a {
-	color: #2563eb;
-	text-decoration: none;
-	transition: color 0.2s;
-}
-a:hover {
-	color: #1d4ed8;
-}
-
-.glass {
-	background: rgba(255,255,255,0.7);
-	box-shadow: 0 4px 32px 0 rgba(30,41,59,0.08);
-	border-radius: 18px;
-	border: 1px solid #e0e7ef;
-	backdrop-filter: blur(8px);
-}
-
-.floating-card {
-	background: #fff;
-	border-radius: 18px;
-	box-shadow: 0 4px 32px 0 rgba(30,41,59,0.10);
-	border: 1px solid #e0e7ef;
-	transition: box-shadow 0.2s, border-color 0.2s;
-}
-.floating-card:hover {
-	box-shadow: 0 8px 40px 0 rgba(30,41,59,0.13);
-	border-color: #c7d2fe;
 }
