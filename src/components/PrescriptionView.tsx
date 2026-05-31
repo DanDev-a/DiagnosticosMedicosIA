@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, memo } from 'react'
-import { FileText, Loader2, Copy, Check, Sparkles, Printer, Eye, Stethoscope, Syringe } from 'lucide-react'
+import { FileText, Loader2, Copy, Check, Printer, Eye } from 'lucide-react'
 import { callGroqAPI, SYSTEM_PROMPT_PRESCRIPTION } from '../lib/groq'
 import type { Diagnosis, PatientInfo } from '../types'
 
